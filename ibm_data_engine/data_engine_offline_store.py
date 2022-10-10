@@ -27,6 +27,9 @@ class DataEngineOfflineStoreConfig(FeastConfigBaseModel):
         "ibm_data_engine.DataEngineOfflineStore"
     ] = "ibm_data_engine.DataEngineOfflineStore"
 
+    api_key: str
+    instance_crn: str
+
 
 class DataEngineDataSource(DataSource):
     """Custom data source class for local files"""
