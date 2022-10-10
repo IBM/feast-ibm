@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "ibm-data-engine"
+version = "0.25.0"
+description = "Feast offline feature store implementation backed by the IBM Cloud Data Engine"
+authors = [
+    "Michal Siedlaczek <michal.siedlaczek@ibm.com>",
+    "Abhay Ratnaparkhi <abhay.ratnaparkhi1@ibm.com>",
+    "Jay Hou <jhou@us.ibm.com>",
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+feast = "~0.25.0"
+pydantic = "^1"
+ibmcloudsql = "~0.5.10"
+
+[tool.poetry.dev-dependencies]
+black = "^22.10"
+diff-cover = "^7"
+freezegun = "^1"
+hypothesis = "^6"
+isort = "^5"
+pylint = "^2"
+pytest = "^6"
+pytest-cov = "^4"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
