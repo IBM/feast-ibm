@@ -7,4 +7,5 @@ from ibm_data_engine.data_engine_offline_store import (
     DataEngineOfflineStore,
     DataEngineOfflineStoreConfig,
     DataEngineRetrievalJob,
+    DataEngineSchemaError,
 )

@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import pandas as pd
 import pyarrow
@@ -33,6 +33,13 @@ class DataEngineOfflineStoreConfig(FeastConfigBaseModel):
     target_cos_url: Optional[str] = None
 
 
+class DataEngineSchemaError(Exception):
+    """Raised when retrieving schema fails."""
+
+    def __init__(self, table):
+        super().__init__(f"Error retrieving schema from table: {table}")
+
+
 class DataEngineDataSource(DataSource):
     """Custom data source class for local files"""
 
@@ -45,6 +52,7 @@ class DataEngineDataSource(DataSource):
         created_timestamp_column: Optional[str] = "",
         field_mapping: Optional[Dict[str, str]] = None,
         query: Optional[str] = None,
+        cos_type: str = "parquet",
         description: Optional[str] = "",
         tags: Optional[Dict[str, str]] = None,
         owner: Optional[str] = "",
@@ -62,6 +70,8 @@ class DataEngineDataSource(DataSource):
                 feature names in a feature table or view. Only used for feature columns, not
                 entities or timestamp columns.
             query (optional): SQL query to execute to generate data for this data source.
+            cos_type (optional): If the provided table value is a COS URL, then this defines the
+                type of the underlying data. Valid values are: json, csv, or parquet (default).
             description (optional): A human-readable description.
             tags (optional): A dictionary of key-value pairs to store arbitrary metadata.
             owner (optional): The owner of the bigquery source, typically the email of the primary
@@ -72,6 +82,9 @@ class DataEngineDataSource(DataSource):
 
         self.table = table
         self.query = query
+        self.cos_type = cos_type
+
+        assert cos_type in {"json", "csv", "parquet"}, "cos_type must be one of: json, csv, parquet"
 
         # If no name, use the table as the default name.
         if name is None and table is None:
@@ -94,6 +107,7 @@ class DataEngineDataSource(DataSource):
         custom_source_options = str(data_source.custom_options.configuration, encoding="utf8")
         table = json.loads(custom_source_options)["table"]
         query = json.loads(custom_source_options)["query"]
+        cos_type = json.loads(custom_source_options)["cos_type"]
         return DataEngineDataSource(
             name=data_source.name,
             field_mapping=dict(data_source.field_mapping),
@@ -101,13 +115,16 @@ class DataEngineDataSource(DataSource):
             timestamp_field=data_source.timestamp_field,
             created_timestamp_column=data_source.created_timestamp_column,
             query=query,
+            cos_type=cos_type,
             description=data_source.description,
             tags=dict(data_source.tags),
             owner=data_source.owner,
         )
 
     def to_proto(self) -> DataSourceProto:
-        config_json = json.dumps({"table": self.table, "query": self.query})
+        config_json = json.dumps(
+            {"table": self.table, "query": self.query, "cos_type": self.cos_type}
+        )
         return DataSourceProto(
             name=self.name,
             type=DataSourceProto.CUSTOM_SOURCE,
@@ -123,12 +140,7 @@ class DataEngineDataSource(DataSource):
         )
 
     def validate(self, config: RepoConfig):
-        assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
-        builder = SQLQuery(
-            api_key=config.offline_store.api_key,
-            instance_crn=config.offline_store.instance_crn,
-            target_cos_url=config.offline_store.target_cos_url,
-        )
+        builder = self._sql_builder(config)
 
         if self.table and self.table.startswith("cos://"):
             try:
@@ -153,12 +165,65 @@ class DataEngineDataSource(DataSource):
             return f"`{self.table}`"
         return f"({self.query})"
 
+    def get_table_column_names_and_types(self, config: RepoConfig) -> Iterable[Tuple[str, str]]:
+        """
+        Returns the list of column names and raw column types.
+
+        Args:
+            config: Configuration object used to configure a feature store.
+        """
+        if self.table and self.table.startswith("cos://"):
+            try:
+                schema = self._sql_builder(config).get_schema_data(self.table, type=self.cos_type)
+            except Exception as err:
+                raise DataEngineSchemaError(self.table) from err
+        elif self.table:
+            schema = self._sql_builder(config).get_schema_table(self.table)
+        else:
+            # Technically speaking we could implement this by executing the query and
+            # reading the columns and dtypes from the data frame. The issue here is that
+            # the Pandas types are not the same as Data Engine types.
+            # We can address this at a later point, but this is not a priority, as we'll
+            # most likely use tables and not queries.
+            raise ValueError("Cannot retrieve schema from query")
+        if schema is None:
+            raise DataEngineSchemaError(self.table)
+        return list(zip(schema.col_name, schema.data_type))
+
     @staticmethod
     def source_datatype_to_feast_value_type() -> Callable[[str], ValueType]:
         """
         Returns the callable method that returns Feast type given the raw column type.
         """
-        raise NotImplementedError
+        raw_to_feast = {
+            "binary": ValueType.BYTES,
+            "boolean": ValueType.BOOL,
+            "tinyint": ValueType.INT32,
+            "smallint": ValueType.INT32,
+            "int": ValueType.INT32,
+            "integer": ValueType.INT32,
+            "bigint": ValueType.INT64,
+            "long": ValueType.INT64,
+            "float": ValueType.FLOAT,
+            "double": ValueType.DOUBLE,
+            "decimal": ValueType.DOUBLE,
+            "string": ValueType.STRING,
+            "timestamp": ValueType.UNIX_TIMESTAMP,
+            "array<binary>": ValueType.BYTES_LIST,
+            "array<boolean>": ValueType.BOOL_LIST,
+            "array<tinyint>": ValueType.INT32_LIST,
+            "array<smallint>": ValueType.INT32_LIST,
+            "array<int>": ValueType.INT32_LIST,
+            "array<integer>": ValueType.INT32_LIST,
+            "array<bigint>": ValueType.INT64_LIST,
+            "array<long>": ValueType.INT64_LIST,
+            "array<float>": ValueType.FLOAT_LIST,
+            "array<double>": ValueType.DOUBLE_LIST,
+            "array<decimal>": ValueType.DOUBLE_LIST,
+            "array<string>": ValueType.STRING_LIST,
+            "array<timestamp>": ValueType.UNIX_TIMESTAMP_LIST,
+        }
+        return lambda typ: raw_to_feast.get(typ, ValueType.UNKNOWN)
 
     def __hash__(self):
         return super().__hash__()
@@ -166,7 +231,20 @@ class DataEngineDataSource(DataSource):
     def __eq__(self, other):
         if not isinstance(other, DataEngineDataSource):
             raise TypeError("Comparisons should only involve DataEngineDataSource class objects.")
-        return super().__eq__(other) and self.table == other.table and self.query == other.query
+        return (
+            super().__eq__(other)
+            and self.table == other.table
+            and self.query == other.query
+            and self.cos_type == self.cos_type
+        )
+
+    def _sql_builder(self, config: RepoConfig):
+        assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
+        return SQLQuery(
+            api_key=config.offline_store.api_key,
+            instance_crn=config.offline_store.instance_crn,
+            target_cos_url=config.offline_store.target_cos_url,
+        )
 
 
 class DataEngineRetrievalJob(RetrievalJob):
