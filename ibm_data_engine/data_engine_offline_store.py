@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Optional, Union
 import pandas as pd
 import pyarrow
 from feast.data_source import DataSource
-from feast.errors import DataSourceNoNameException
+from feast.errors import DataSourceNoNameException, DataSourceNotFoundException
 from feast.feature_view import FeatureView
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob, RetrievalMetadata
 from feast.infra.registry.registry import Registry
@@ -17,6 +17,7 @@ from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
 from feast.saved_dataset import SavedDatasetStorage
 from feast.value_type import ValueType
+from ibmcloudsql import SQLQuery
 from typing_extensions import Literal
 
 
@@ -29,6 +30,7 @@ class DataEngineOfflineStoreConfig(FeastConfigBaseModel):
 
     api_key: str
     instance_crn: str
+    target_cos_url: Optional[str] = None
 
 
 class DataEngineDataSource(DataSource):
@@ -52,7 +54,8 @@ class DataEngineDataSource(DataSource):
             name (optional): Name for the source. Defaults to the table if not specified.
             timestamp_field (optional): Event timestamp field used for point in time
                 joins of feature values.
-            table (optional): The Data Engine table where features can be found.
+            table (optional): The Data Engine table where features can be found;
+                can also be COS address.
             created_timestamp_column (optional): Timestamp column when row was created, used for
                 deduplicating rows.
             field_mapping (optional): A dictionary mapping of column names in this data source to
@@ -120,9 +123,29 @@ class DataEngineDataSource(DataSource):
         )
 
     def validate(self, config: RepoConfig):
-        # This will validate if the config is correct, e.g., check for existance
-        # of the given table.
-        raise NotImplementedError
+        assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
+        builder = SQLQuery(
+            api_key=config.offline_store.api_key,
+            instance_crn=config.offline_store.instance_crn,
+            target_cos_url=config.offline_store.target_cos_url,
+        )
+
+        if self.table and self.table.startswith("cos://"):
+            try:
+                builder.get_cos_summary(self.table)
+                return
+            except Exception as err:
+                raise DataSourceNotFoundException(self.table) from err
+
+        if self.table:
+            if builder.get_schema_table(self.table) is None:
+                raise DataSourceNotFoundException(self.table)
+            return
+
+        try:
+            builder.execute_sql(f"SELECT * FROM ({self.query}) LIMIT 1")
+        except Exception as err:
+            raise DataSourceNotFoundException(self.query) from err
 
     def get_table_query_string(self) -> str:
         """Returns a string that can directly be used to reference this table in SQL"""
