@@ -20,6 +20,17 @@ from feast.value_type import ValueType
 from ibmcloudsql import SQLQuery
 from typing_extensions import Literal
 
+TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+
+
+def _sql_builder(config: RepoConfig) -> SQLQuery:
+    assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
+    return SQLQuery(
+        api_key=config.offline_store.api_key,
+        instance_crn=config.offline_store.instance_crn,
+        target_cos_url=config.offline_store.target_cos_url,
+    )
+
 
 class DataEngineOfflineStoreConfig(FeastConfigBaseModel):
     """Offline store config for IBM Cloud Data Engine."""
@@ -140,7 +151,7 @@ class DataEngineDataSource(DataSource):
         )
 
     def validate(self, config: RepoConfig):
-        builder = self._sql_builder(config)
+        builder = _sql_builder(config)
 
         if self.table and self.table.startswith("cos://"):
             try:
@@ -174,11 +185,11 @@ class DataEngineDataSource(DataSource):
         """
         if self.table and self.table.startswith("cos://"):
             try:
-                schema = self._sql_builder(config).get_schema_data(self.table, type=self.cos_type)
+                schema = _sql_builder(config).get_schema_data(self.table, type=self.cos_type)
             except Exception as err:
                 raise DataEngineSchemaError(self.table) from err
         elif self.table:
-            schema = self._sql_builder(config).get_schema_table(self.table)
+            schema = _sql_builder(config).get_schema_table(self.table)
         else:
             # Technically speaking we could implement this by executing the query and
             # reading the columns and dtypes from the data frame. The issue here is that
@@ -238,21 +249,25 @@ class DataEngineDataSource(DataSource):
             and self.cos_type == self.cos_type
         )
 
-    def _sql_builder(self, config: RepoConfig):
-        assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
-        return SQLQuery(
-            api_key=config.offline_store.api_key,
-            instance_crn=config.offline_store.instance_crn,
-            target_cos_url=config.offline_store.target_cos_url,
-        )
+    def sql_from(self, sql: SQLQuery, alias: Optional[str] = None) -> SQLQuery:
+        """Adds FROM clause to the given SQL builder.
+
+        Note that alias is ignored for query sources.
+        """
+        if self.table and self.table.startswith("cos://"):
+            return sql.from_cos_(self.table, format_type=self.cos_type, alias=alias)
+        if self.table:
+            return sql.from_table_(self.table, alias=alias)
+        return sql.from_view_(self.query)
 
 
 class DataEngineRetrievalJob(RetrievalJob):
     """Retrieval job for DataEngineOfflineStore."""
 
-    def __init__(self, evaluation_function: Callable):
+    def __init__(self, evaluation_function: Callable, retrieval_metadata: RetrievalMetadata):
         """Initialize a lazy historical retrieval job"""
         self.evaluation_function = evaluation_function
+        self._retrieval_metadata = retrieval_metadata
 
     def persist(self, storage: SavedDatasetStorage, allow_overwrite: bool = False):
         raise NotImplementedError
@@ -260,15 +275,15 @@ class DataEngineRetrievalJob(RetrievalJob):
     @property
     def metadata(self) -> Optional[RetrievalMetadata]:
         """Returns metadata about the retrieval job."""
-        raise NotImplementedError
+        return self._retrieval_metadata
 
     @property
     def full_feature_names(self):
-        raise NotImplementedError
+        return False
 
     @property
     def on_demand_feature_views(self):
-        raise NotImplementedError
+        return None
 
     def _to_df_internal(self) -> pd.DataFrame:
         df = self.evaluation_function()
@@ -308,3 +323,46 @@ class DataEngineOfflineStore(OfflineStore):
         end_date: datetime,
     ) -> RetrievalJob:
         raise NotImplementedError
+
+    # pylint: disable=too-many-arguments
+    @staticmethod
+    def pull_all_from_table_or_query(
+        config: RepoConfig,
+        data_source: DataSource,
+        join_key_columns: List[str],
+        feature_name_columns: List[str],
+        timestamp_field: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> RetrievalJob:
+        assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
+        assert isinstance(data_source, DataEngineDataSource)
+
+        def retrieve_df():
+            sql = _sql_builder(config)
+            sql.select_(", ".join(join_key_columns + feature_name_columns + [timestamp_field]))
+            sql = data_source.sql_from(sql)
+            start = cast_timestamp(start_date)
+            end = cast_timestamp(end_date)
+            sql = sql.where_(f"{timestamp_field} BETWEEN {start} AND {end}")
+            return sql.run(get_result=True).data
+
+        return DataEngineRetrievalJob(
+            retrieve_df,
+            RetrievalMetadata(
+                feature_name_columns,
+                join_key_columns,
+                min_event_timestamp=start_date,
+                max_event_timestamp=end_date,
+            ),
+        )
+
+
+def cast_timestamp(timestamp: datetime) -> str:
+    """Formats timestamp for SQL use.
+
+    >>> cast_timestamp(datetime(year=2022, month=10, day=11))
+    "CAST('2022-10-11 00:00:00.000000' AS TIMESTAMP)"
+    """
+    tstamp = timestamp.strftime(TIMESTAMP_FORMAT)
+    return f"CAST('{tstamp}' AS TIMESTAMP)"

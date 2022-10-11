@@ -1,13 +1,21 @@
+import re
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import pandas as pd
+import pyarrow
 import pytest
-from feast import ValueType
+from feast import RepoConfig, ValueType
 from feast.errors import DataSourceNoNameException, DataSourceNotFoundException
+from feast.infra.offline_stores.offline_store import RetrievalMetadata
+from ibmcloudsql import SQLQuery
+from pandas.testing import assert_frame_equal
 
 from ibm_data_engine import (
     DataEngineDataSource,
+    DataEngineOfflineStore,
     DataEngineOfflineStoreConfig,
+    DataEngineRetrievalJob,
     DataEngineSchemaError,
     __version__,
     data_engine_offline_store,
@@ -156,3 +164,116 @@ class TestDataEngineDataSource:
         assert types("array<decimal>") == ValueType.DOUBLE_LIST
         assert types("array<string>") == ValueType.STRING_LIST
         assert types("array<timestamp>") == ValueType.UNIX_TIMESTAMP_LIST
+
+    def test_sql_from(self):
+        sql = lambda: SQLQuery(api_key="API", instance_crn="CRN")
+        assert DataEngineDataSource(table="table").sql_from(sql()).get_sql() == "\nFROM TABLE"
+        assert (
+            DataEngineDataSource(table="cos://blah").sql_from(sql()).get_sql()
+            == "\nFROM cos://blah stored AS parquet"
+        )
+        assert (
+            DataEngineDataSource(table="cos://blah", cos_type="csv").sql_from(sql()).get_sql()
+            == "\nFROM cos://blah stored AS csv"
+        )
+        assert (
+            DataEngineDataSource(name="name", query="query").sql_from(sql()).get_sql()
+            == "\nFROM (query)"
+        )
+
+    def test_sql_from_with_alias(self):
+        sql = lambda: SQLQuery(api_key="API", instance_crn="CRN")
+        assert (
+            DataEngineDataSource(table="table").sql_from(sql(), alias="t").get_sql()
+            == "\nFROM TABLE t"
+        )
+        assert (
+            DataEngineDataSource(table="cos://blah").sql_from(sql(), alias="t").get_sql()
+            == "\nFROM cos://blah stored AS parquet t"
+        )
+        assert (
+            DataEngineDataSource(table="cos://blah", cos_type="csv")
+            .sql_from(sql(), alias="t")
+            .get_sql()
+            == "\nFROM cos://blah stored AS csv t"
+        )
+        assert (
+            DataEngineDataSource(name="name", query="query").sql_from(sql(), alias="t").get_sql()
+            == "\nFROM (query)"
+        )
+
+
+class TestRetrievalJob:
+    def test_metadata(self):
+        """Metadata is simply passed to the constructor."""
+        metadata = RetrievalMetadata(features=["f1", "f2"], keys=["k1"])
+        assert DataEngineRetrievalJob(lambda: pd.DataFrame(), metadata).metadata == metadata
+
+    def test_to_df(self):
+        metadata = RetrievalMetadata(features=["f1", "f2"], keys=["k1"])
+        df = pd.DataFrame({"f1": [1, 2], "f2": ["a", "b"], "k1": [0, 1]})
+        assert_frame_equal(DataEngineRetrievalJob(lambda: df, metadata).to_df(), df)
+
+    def test_to_arrow(self):
+        metadata = RetrievalMetadata(features=["f1", "f2"], keys=["k1"])
+        df = pd.DataFrame({"f1": [1, 2], "f2": ["a", "b"], "k1": [0, 1]})
+        assert (
+            DataEngineRetrievalJob(lambda: df, metadata)
+            .to_arrow()
+            .equals(pyarrow.Table.from_pandas(df))
+        )
+
+
+def test_cast_timestamp():
+    assert (
+        data_engine_offline_store.cast_timestamp(datetime(year=2022, month=10, day=11))
+        == "CAST('2022-10-11 00:00:00.000000' AS TIMESTAMP)"
+    )
+
+
+class TestDataEngineOfflineStore:
+    def test_pull_all_from_table_or_query(self, monkeypatch):
+        df = pd.DataFrame({"f1": [1, 2], "f2": ["a", "b"], "k1": [0, 1]})
+        sql = SQLQuery(
+            api_key="API",
+            instance_crn="CRN",
+            target_cos_url="cos://us-south/sql/sql",
+        )
+        sql.run = MagicMock(return_value=MagicMock(data=df))
+        monkeypatch.setattr(data_engine_offline_store, "_sql_builder", lambda _: sql)
+        src = DataEngineDataSource(table="document_features")
+        config = DataEngineOfflineStoreConfig(
+            api_key="API",
+            instance_crn="CRN",
+            target_cos_url="cos://us-south/sql/sql",
+        )
+        repo_config = RepoConfig(
+            project="test",
+            provider="local",
+            offline_store=config,
+            entity_key_serialization_version=2,
+        )
+        offline_store = DataEngineOfflineStore()
+        job = offline_store.pull_all_from_table_or_query(
+            config=repo_config,
+            data_source=src,
+            join_key_columns=["docid"],
+            feature_name_columns=["source"],
+            timestamp_field="timestamp",
+            start_date=datetime.strptime(
+                "2022-08-12 09:09:27.108650",
+                data_engine_offline_store.TIMESTAMP_FORMAT,
+            ),
+            end_date=datetime.strptime(
+                "2022-08-12 09:09:27.108652",
+                data_engine_offline_store.TIMESTAMP_FORMAT,
+            ),
+        )
+        assert_frame_equal(job.to_df(), df)
+        sql.run.assert_called_once_with(get_result=True)
+        assert (
+            re.sub("\\s+", " ", sql.get_sql())
+            == "SELECT docid, SOURCE, timestamp FROM document_features "
+            "WHERE timestamp BETWEEN cast('2022-08-12 09:09:27.108650' AS TIMESTAMP) "
+            "AND cast('2022-08-12 09:09:27.108652' AS TIMESTAMP)"
+        )
