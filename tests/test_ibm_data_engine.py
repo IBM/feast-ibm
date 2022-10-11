@@ -277,3 +277,45 @@ class TestDataEngineOfflineStore:
             "WHERE timestamp BETWEEN cast('2022-08-12 09:09:27.108650' AS TIMESTAMP) "
             "AND cast('2022-08-12 09:09:27.108652' AS TIMESTAMP)"
         )
+
+    def test_pull_latest_from_table_or_query(self, monkeypatch):
+        df = pd.DataFrame({"f1": [1, 2], "f2": ["a", "b"], "k1": [0, 1]})
+        sql = SQLQuery(
+            api_key="API",
+            instance_crn="CRN",
+            target_cos_url="cos://us-south/sql/sql",
+        )
+        sql.run_sql = MagicMock(return_value=df)
+        monkeypatch.setattr(data_engine_offline_store, "_sql_builder", lambda _: sql)
+        src = DataEngineDataSource(table="document_features")
+        config = DataEngineOfflineStoreConfig(
+            api_key="API",
+            instance_crn="CRN",
+            target_cos_url="cos://us-south/sql/sql",
+        )
+        repo_config = RepoConfig(
+            project="test",
+            provider="local",
+            offline_store=config,
+            entity_key_serialization_version=2,
+        )
+        offline_store = DataEngineOfflineStore()
+        job = offline_store.pull_latest_from_table_or_query(
+            config=repo_config,
+            data_source=src,
+            join_key_columns=["docid"],
+            feature_name_columns=["source"],
+            timestamp_field="timestamp",
+            created_timestamp_column=None,
+            start_date=datetime.strptime(
+                "2022-08-12 09:09:27.108650",
+                data_engine_offline_store.TIMESTAMP_FORMAT,
+            ),
+            end_date=datetime.strptime(
+                "2022-08-12 09:09:27.108652",
+                data_engine_offline_store.TIMESTAMP_FORMAT,
+            ),
+        )
+        assert_frame_equal(job.to_df(), df)
+        expected_arg = "SELECT de_a.docid, de_a.source, de_a.timestamp FROM `document_features` as de_a JOIN (SELECT docid,\n       max(timestamp) AS timestamp\nFROM document_features\nWHERE timestamp BETWEEN cast('2022-08-12 09:09:27.108650' AS TIMESTAMP) AND cast('2022-08-12 09:09:27.108652' AS TIMESTAMP)\nGROUP BY docid) as de_b WHERE de_a.docid = de_b.docid AND de_a.timestamp = de_b.timestamp"
+        sql.run_sql.assert_called_once_with(expected_arg)

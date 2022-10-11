@@ -32,6 +32,16 @@ def _sql_builder(config: RepoConfig) -> SQLQuery:
     )
 
 
+def _join(fields: List[str], alias: Optional[str] = None) -> str:
+    if not alias:
+        return ", ".join(fields)
+    return ", ".join(f"{alias}.{field}" for field in fields)
+
+
+def _where(fields: List[str], aliases: Tuple[str, str]) -> str:
+    return ", ".join(f"{aliases[0]}.{field} = {aliases[1]}.{field}" for field in fields)
+
+
 class DataEngineOfflineStoreConfig(FeastConfigBaseModel):
     """Offline store config for IBM Cloud Data Engine."""
 
@@ -269,7 +279,9 @@ class DataEngineRetrievalJob(RetrievalJob):
         self.evaluation_function = evaluation_function
         self._retrieval_metadata = retrieval_metadata
 
-    def persist(self, storage: SavedDatasetStorage, allow_overwrite: bool = False):
+    def persist(
+        self, storage: SavedDatasetStorage, allow_overwrite: bool = False
+    ):  # pragma: no cover
         raise NotImplementedError
 
     @property
@@ -278,7 +290,7 @@ class DataEngineRetrievalJob(RetrievalJob):
         return self._retrieval_metadata
 
     @property
-    def full_feature_names(self):
+    def full_feature_names(self):  # pragma: no cover
         return False
 
     @property
@@ -322,7 +334,39 @@ class DataEngineOfflineStore(OfflineStore):
         start_date: datetime,
         end_date: datetime,
     ) -> RetrievalJob:
-        raise NotImplementedError
+        assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
+        assert isinstance(data_source, DataEngineDataSource)
+
+        def inner():
+            """Constructs the SQL string for the subquery that calculates max timestamp per key."""
+            keys = _join(join_key_columns)
+            sql = _sql_builder(config).select_(f"{keys}, max({timestamp_field}) as timestamp")
+            data_source.sql_from(sql)
+            start = cast_timestamp(start_date)
+            end = cast_timestamp(end_date)
+            sql.where_(f"{timestamp_field} BETWEEN {start} AND {end}")
+            return sql.group_by_(keys).get_sql()
+
+        def retrieve_df():
+            fields = _join(
+                join_key_columns + feature_name_columns + [timestamp_field], alias="de_a"
+            )
+            where_clause = _where(join_key_columns, aliases=("de_a", "de_b"))
+            sql_query = (
+                f"SELECT {fields} FROM {data_source.get_table_query_string()} as de_a "
+                f"JOIN ({inner()}) as de_b WHERE {where_clause} AND de_a.timestamp = de_b.timestamp"
+            )
+            return _sql_builder(config).run_sql(sql_query)
+
+        return DataEngineRetrievalJob(
+            retrieve_df,
+            RetrievalMetadata(
+                feature_name_columns,
+                join_key_columns,
+                min_event_timestamp=start_date,
+                max_event_timestamp=end_date,
+            ),
+        )
 
     # pylint: disable=too-many-arguments
     @staticmethod
