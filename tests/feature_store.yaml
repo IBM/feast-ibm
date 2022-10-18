@@ -1,0 +1,9 @@
+project: test_plugin
+entity_key_serialization_version: 2
+registry: data/registry.db
+provider: local
+offline_store:
+    type: ibm_data_engine.DataEngineOfflineStore
+    api_key: "TEST_API_KEY"
+    instance_crn: "TEST_INSTANCE_CRN"
+    target_cos_url: cos://us-south/w3-search-reports-new/tmp/sql

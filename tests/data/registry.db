@@ -1,0 +1,15 @@
+
+@
+ 
+driver"	driver_idJtest_plugin
+›§´šØ™íÈ›§´šØ™íÈ1"$f1f27a8d-161f-4777-b545-44549ba42fd3*›§´šðüóÈ2×
+¸
+driver_hourly_statstest_plugindriver"
+	conv_rate"
+acc_rate"
+avg_daily_trips*
+teamdriver_performance2€£:µevent_timestamp‚A
+?{"table": "driver_stats", "query": null, "cos_type": "parquet"}Š>ibm_data_engine.data_engine_offline_store.DataEngineDataSource¢driver_hourly_stats_source@
+ÉŸ´šàÝ«EÉŸ´šàÝ«EbÃevent_timestamp‚A
+?{"table": "driver_stats", "query": null, "cos_type": "parquet"}Š>ibm_data_engine.data_engine_offline_store.DataEngineDataSource¢driver_hourly_stats_sourceªtest_pluginz3
+test_plugin$74850b70-e99e-4c3d-bae9-6cc23fc61e54

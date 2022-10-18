@@ -1,13 +1,21 @@
 import re
 from datetime import datetime
+from pathlib import Path
+from typing import List
 from unittest.mock import MagicMock
 
 import pandas as pd
 import pyarrow
 import pytest
-from feast import RepoConfig, ValueType
+import testfixtures
+
+from feast import RepoConfig, ValueType, OnDemandFeatureView
 from feast.errors import DataSourceNoNameException, DataSourceNotFoundException
+from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import RetrievalMetadata
+from feast.infra.registry.base_registry import BaseRegistry
+from feast.infra.registry.registry import Registry
+from feast.repo_config import RegistryConfig
 from ibmcloudsql import SQLQuery
 from pandas.testing import assert_frame_equal
 
@@ -20,6 +28,7 @@ from ibm_data_engine import (
     __version__,
     data_engine_offline_store,
 )
+from tests.test_integration import get_driver_feature_view, EXPECTED_QUERY
 
 
 def test_version():
@@ -224,6 +233,14 @@ class TestRetrievalJob:
         )
 
 
+class MockRegistry(Registry):
+    def list_on_demand_feature_views(
+        self, project: str, allow_cache: bool = False
+    ) -> List[OnDemandFeatureView]:
+        OnDemandFeatureView
+        return []
+
+
 def test_cast_timestamp():
     assert (
         data_engine_offline_store.cast_timestamp(datetime(year=2022, month=10, day=11))
@@ -319,3 +336,103 @@ class TestDataEngineOfflineStore:
         assert_frame_equal(job.to_df(), df)
         expected_arg = "SELECT de_a.docid, de_a.source, de_a.timestamp FROM `document_features` as de_a JOIN (SELECT docid,\n       max(timestamp) AS timestamp\nFROM document_features\nWHERE timestamp BETWEEN cast('2022-08-12 09:09:27.108650' AS TIMESTAMP) AND cast('2022-08-12 09:09:27.108652' AS TIMESTAMP)\nGROUP BY docid) as de_b WHERE de_a.docid = de_b.docid AND de_a.timestamp = de_b.timestamp"
         sql.run_sql.assert_called_once_with(expected_arg)
+
+    def test_get_historical_features(self, monkeypatch):
+        offline_store = DataEngineOfflineStore()
+        driver, driver_stats_source, driver_stats_feature_view = get_driver_feature_view()
+
+        expected_df = pd.DataFrame(
+            {
+                "driver_id": [1001, 1002, 1003],
+                "event_timestamp": [
+                    datetime(2021, 4, 12, 10, 59, 42),
+                    datetime(2021, 4, 12, 8, 12, 10),
+                    datetime(2021, 4, 12, 16, 40, 26),
+                ],
+                "conv_rate": [1.0, 2.0, 3.0],
+                "acc_rate": [1.0, 1.0, 0.0],
+                "avg_daily_trips": [200, 300, 400],
+                "label_driver_reported_satisfaction": [1, 5, 3],
+            }
+        )
+
+        sql = SQLQuery(
+            api_key="API",
+            instance_crn="CRN",
+            target_cos_url="cos://us-south/sql/sql",
+        )
+
+        sql.run_sql = MagicMock(return_value=expected_df)
+        mock_upload = MagicMock(return_value=MagicMock(data="cospath"))
+        mock_delete = MagicMock()
+
+        monkeypatch.setattr(data_engine_offline_store, "_sql_builder", lambda _: sql)
+        monkeypatch.setattr(data_engine_offline_store, "_upload_entity_df", mock_upload)
+        monkeypatch.setattr(data_engine_offline_store, "_delete_entity_df", mock_delete)
+        monkeypatch.setattr(
+            offline_utils, "get_temp_entity_table_name", lambda: "FEAST_TEMP_ENTITY_TABLE"
+        )
+
+        entity_df = pd.DataFrame.from_dict(
+            {
+                "driver_id": [1001, 1002, 1003],
+                "event_timestamp": [
+                    datetime(2021, 4, 12, 10, 59, 42),
+                    datetime(2021, 4, 12, 8, 12, 10),
+                    datetime(2021, 4, 12, 16, 40, 26),
+                ],
+                "label_driver_reported_satisfaction": [1, 5, 3],
+            }
+        )
+
+        config = DataEngineOfflineStoreConfig(
+            api_key="API",
+            instance_crn="CRN",
+            target_cos_url="cos://us-south/sql/sql",
+        )
+        repo_config = RepoConfig(
+            project="test_plugin",
+            provider="local",
+            offline_store=config,
+            entity_key_serialization_version=2,
+        )
+
+        mock_registry = MockRegistry(
+            RegistryConfig(path="../integration-test/registry.db"), Path("./tests")
+        )
+        job = offline_store.get_historical_features(
+            config=repo_config,
+            feature_views=[driver_stats_feature_view],
+            feature_refs=[
+                "driver_hourly_stats:conv_rate",
+                "driver_hourly_stats:acc_rate",
+                "driver_hourly_stats:avg_daily_trips",
+            ],
+            entity_df=entity_df,
+            registry=mock_registry,
+            project="test_plugin",
+            full_feature_names=False,
+        )
+        assert isinstance(job, DataEngineRetrievalJob)
+        training_df = job.to_df()
+        query = sql.run_sql.call_args_list[0].args[0]
+        assert (
+            testfixtures.compare(query, EXPECTED_QUERY, blanklines=False, trailing_whitespace=False)
+            is None
+        )
+        assert_frame_equal(training_df, expected_df)
+
+        with pytest.raises(NotImplementedError):
+            offline_store.get_historical_features(
+                config=repo_config,
+                feature_views=[driver_stats_feature_view],
+                feature_refs=[
+                    "driver_hourly_stats:conv_rate",
+                    "driver_hourly_stats:acc_rate",
+                    "driver_hourly_stats:avg_daily_trips",
+                ],
+                entity_df="driver",
+                registry=mock_registry,
+                project="test_plugin",
+                full_feature_names=False,
+            )

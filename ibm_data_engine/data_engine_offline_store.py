@@ -1,14 +1,16 @@
 """Implementation of the offline store backed by the IBM Cloud Data Engine."""
-
 import json
+import tempfile
 from datetime import datetime
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import pyarrow
 from feast.data_source import DataSource
-from feast.errors import DataSourceNoNameException, DataSourceNotFoundException
+from feast.errors import DataSourceNoNameException, DataSourceNotFoundException, InvalidEntityType
 from feast.feature_view import FeatureView
+from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import OfflineStore, RetrievalJob, RetrievalMetadata
 from feast.infra.registry.registry import Registry
 
@@ -320,7 +322,60 @@ class DataEngineOfflineStore(OfflineStore):
         project: str,
         full_feature_names: bool = False,
     ) -> RetrievalJob:
-        raise NotImplementedError
+        assert isinstance(config.offline_store, DataEngineOfflineStoreConfig)
+        for fv in feature_views:
+            assert isinstance(fv.batch_source, DataEngineDataSource)
+
+        entity_schema = _get_entity_schema(entity_df, config)
+
+        entity_df_event_timestamp_col = offline_utils.infer_event_timestamp_from_entity_df(
+            entity_schema
+        )
+
+        entity_df_event_timestamp_range = _get_entity_df_event_timestamp_range(
+            entity_df,
+            entity_df_event_timestamp_col,
+            config,
+        )
+
+        def query_generator():
+            table_name = offline_utils.get_temp_entity_table_name()
+
+            cos_location = _upload_entity_df(entity_df, config, table_name)
+
+            expected_join_keys = offline_utils.get_expected_join_keys(
+                project, feature_views, registry
+            )
+
+            offline_utils.assert_expected_columns_in_entity_df(
+                entity_schema, expected_join_keys, entity_df_event_timestamp_col
+            )
+
+            query_context = offline_utils.get_feature_view_query_context(
+                feature_refs,
+                feature_views,
+                registry,
+                project,
+                entity_df_event_timestamp_range,
+            )
+            # Generate the Data Engine SQL query from the query context
+            query = offline_utils.build_point_in_time_query(
+                query_context,
+                left_table_query_string=table_name,
+                entity_df_event_timestamp_col=entity_df_event_timestamp_col,
+                entity_df_columns=entity_schema.keys(),
+                query_template=MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN,
+                full_feature_names=full_feature_names,
+            )
+
+            try:
+                return _sql_builder(config).run_sql(query)
+            finally:
+                _delete_entity_df(cos_location, config, table_name)
+
+        return DataEngineRetrievalJob(
+            query_generator, RetrievalMetadata(feature_refs, entity_schema.keys())
+        )
 
     # pylint: disable=too-many-arguments
     @staticmethod
@@ -410,3 +465,256 @@ def cast_timestamp(timestamp: datetime) -> str:
     """
     tstamp = timestamp.strftime(TIMESTAMP_FORMAT)
     return f"CAST('{tstamp}' AS TIMESTAMP)"
+
+
+def _delete_entity_df(
+    cos_location: str,
+    config: RepoConfig,
+    table_name: str,
+):
+    _sql_builder(config).delete_objects(cos_location)
+    _sql_builder(config).drop_table(table_name)
+
+
+def _upload_entity_df(
+    entity_df: Union[pd.DataFrame, str],
+    config: RepoConfig,
+    table_name: str,
+):
+    if isinstance(entity_df, pd.DataFrame):
+        # If the entity_df is a pandas dataframe, upload it to s3
+        with tempfile.NamedTemporaryFile(delete=False) as temp:
+            copy_from = temp.name + ".parquet"
+            entity_df.to_parquet(copy_from)
+            copy_to = (
+                f"{config.offline_store.target_cos_url}/entity_df/{table_name}/{table_name}.parquet"
+            )
+            _sql_builder(config).copy_objects(copy_from, copy_to)
+            _sql_builder(config).create_table(table_name, copy_to, format_type="PARQUET")
+            return copy_to
+
+    elif isinstance(entity_df, str):
+        # TODO: If the entity_df is a string (SQL query), create a  table out of it
+        raise NotImplementedError
+
+    else:
+        raise InvalidEntityType(type(entity_df))
+
+
+def _get_entity_schema(
+    entity_df: Union[pd.DataFrame, str],
+    config: RepoConfig,
+) -> Dict[str, np.dtype]:
+    if isinstance(entity_df, pd.DataFrame):
+        return dict(zip(entity_df.columns, entity_df.dtypes))
+
+    elif isinstance(entity_df, str):
+        # If the entity_df is a string (SQL query)
+        # TODO:provide implementation for string entity
+        raise NotImplementedError
+    else:
+        raise InvalidEntityType(type(entity_df))
+
+
+def _get_entity_df_event_timestamp_range(
+    entity_df: Union[pd.DataFrame, str],
+    entity_df_event_timestamp_col: str,
+    config: RepoConfig,
+) -> Tuple[datetime, datetime]:
+    if isinstance(entity_df, pd.DataFrame):
+        entity_df_event_timestamp = entity_df.loc[:, entity_df_event_timestamp_col].infer_objects()
+        if pd.api.types.is_string_dtype(entity_df_event_timestamp):
+            entity_df_event_timestamp = pd.to_datetime(entity_df_event_timestamp, utc=True)
+        entity_df_event_timestamp_range = (
+            entity_df_event_timestamp.min().to_pydatetime(),
+            entity_df_event_timestamp.max().to_pydatetime(),
+        )
+    elif isinstance(entity_df, str):
+        # If the entity_df is a string (SQL query), determine range
+        # TODO:provide implementation for string query
+        raise NotImplementedError
+    else:
+        raise InvalidEntityType(type(entity_df))
+
+    return entity_df_event_timestamp_range
+
+
+MULTIPLE_FEATURE_VIEW_POINT_IN_TIME_JOIN = """
+/*
+ Compute a deterministic hash for the `left_table_query_string` that will be used throughout
+ all the logic as the field to GROUP BY the data
+*/
+WITH entity_dataframe AS (
+    SELECT *,
+        {{entity_df_event_timestamp_col}} AS entity_timestamp
+        {% for featureview in featureviews %}
+            {% if featureview.entities %}
+            ,(
+                {% for entity in featureview.entities %}
+                    CAST({{entity}} as STRING) ||
+                {% endfor %}
+                CAST({{entity_df_event_timestamp_col}} AS STRING)
+            ) AS {{featureview.name}}__entity_row_unique_id
+            {% else %}
+            ,CAST({{entity_df_event_timestamp_col}} AS STRING) AS {{featureview.name}}__entity_row_unique_id
+            {% endif %}
+        {% endfor %}
+    FROM {{ left_table_query_string }}
+),
+
+{% for featureview in featureviews %}
+
+{{ featureview.name }}__entity_dataframe AS (
+    SELECT
+        {{ featureview.entities | join(', ')}}{% if featureview.entities %},{% else %}{% endif %}
+        entity_timestamp,
+        {{featureview.name}}__entity_row_unique_id
+    FROM entity_dataframe
+    GROUP BY
+        {{ featureview.entities | join(', ')}}{% if featureview.entities %},{% else %}{% endif %}
+        entity_timestamp,
+        {{featureview.name}}__entity_row_unique_id
+),
+
+/*
+ This query template performs the point-in-time correctness join for a single feature set table
+ to the provided entity table.
+
+ 1. We first join the current feature_view to the entity dataframe that has been passed.
+ This JOIN has the following logic:
+    - For each row of the entity dataframe, only keep the rows where the `timestamp_field`
+    is less than the one provided in the entity dataframe
+    - If there a TTL for the current feature_view, also keep the rows where the `timestamp_field`
+    is higher the the one provided minus the TTL
+    - For each row, Join on the entity key and retrieve the `entity_row_unique_id` that has been
+    computed previously
+
+ The output of this CTE will contain all the necessary information and already filtered out most
+ of the data that is not relevant.
+*/
+
+{{ featureview.name }}__subquery AS (
+    SELECT
+        {{ featureview.timestamp_field }} as event_timestamp,
+        {{ featureview.created_timestamp_column ~ ' as created_timestamp,' if featureview.created_timestamp_column else '' }}
+        {{ featureview.entity_selections | join(', ')}}{% if featureview.entity_selections %},{% else %}{% endif %}
+        {% for feature in featureview.features %}
+            {{ feature }} as {% if full_feature_names %}{{ featureview.name }}__{{featureview.field_mapping.get(feature, feature)}}{% else %}{{ featureview.field_mapping.get(feature, feature) }}{% endif %}{% if loop.last %}{% else %}, {% endif %}
+        {% endfor %}
+    FROM {{ featureview.table_subquery }}
+   WHERE {{ featureview.timestamp_field }} <= to_timestamp('{{ featureview.max_event_timestamp }}')
+    {% if featureview.date_partition_column != "" and featureview.date_partition_column is not none %}
+      AND {{ featureview.date_partition_column }} <= '{{ featureview.max_event_timestamp[:10] }}'
+    {% endif %}
+
+    {% if featureview.ttl == 0 %}{% else %}
+    AND {{ featureview.timestamp_field }} >= to_timestamp('{{ featureview.min_event_timestamp }}')
+        {% if featureview.date_partition_column != "" and featureview.date_partition_column is not none %}
+          AND {{ featureview.date_partition_column }} >= '{{ featureview.min_event_timestamp[:10] }}'
+        {% endif %}
+    {% endif %}
+
+),
+
+{{ featureview.name }}__base AS (
+    SELECT
+        subquery.*,
+        entity_dataframe.entity_timestamp,
+        entity_dataframe.{{featureview.name}}__entity_row_unique_id
+    FROM {{ featureview.name }}__subquery AS subquery
+    INNER JOIN {{ featureview.name }}__entity_dataframe AS entity_dataframe
+    ON TRUE
+        AND subquery.event_timestamp <= entity_dataframe.entity_timestamp
+
+        {% if featureview.ttl == 0 %}{% else %}
+        AND subquery.event_timestamp >= entity_dataframe.entity_timestamp -  interval {{ featureview.ttl }} second
+        {% endif %}
+
+        {% for entity in featureview.entities %}
+        AND subquery.{{ entity }} = entity_dataframe.{{ entity }}
+        {% endfor %}
+),
+
+/*
+ 2. If the `created_timestamp_column` has been set, we need to
+ deduplicate the data first. This is done by calculating the
+ `MAX(created_at_timestamp)` for each event_timestamp.
+ We then join the data on the next CTE
+*/
+{% if featureview.created_timestamp_column %}
+{{ featureview.name }}__dedup AS (
+    SELECT
+        {{featureview.name}}__entity_row_unique_id,
+        event_timestamp,
+        MAX(created_timestamp) as created_timestamp
+    FROM {{ featureview.name }}__base
+    GROUP BY {{featureview.name}}__entity_row_unique_id, event_timestamp
+),
+{% endif %}
+
+/*
+ 3. The data has been filtered during the first CTE "*__base"
+ Thus we only need to compute the latest timestamp of each feature.
+*/
+{{ featureview.name }}__latest AS (
+    SELECT
+        event_timestamp,
+        {% if featureview.created_timestamp_column %}created_timestamp,{% endif %}
+        {{featureview.name}}__entity_row_unique_id
+    FROM
+    (
+        SELECT base.*,
+            ROW_NUMBER() OVER(
+                PARTITION BY base.{{featureview.name}}__entity_row_unique_id
+                ORDER BY base.event_timestamp DESC{% if featureview.created_timestamp_column %},base.created_timestamp DESC{% endif %}
+            ) AS row_number
+        FROM {{ featureview.name }}__base as base
+        {% if featureview.created_timestamp_column %}
+            INNER JOIN {{ featureview.name }}__dedup as dedup
+            ON TRUE
+            AND base.{{featureview.name}}__entity_row_unique_id = dedup.{{featureview.name}}__entity_row_unique_id
+            AND base.event_timestamp = dedup.event_timestamp
+            AND base.created_timestamp = dedup.created_timestamp
+        {% endif %}
+    )
+    WHERE row_number = 1
+),
+
+/*
+ 4. Once we know the latest value of each feature for a given timestamp,
+ we can join again the data back to the original "base" dataset
+*/
+{{ featureview.name }}__cleaned AS (
+    SELECT base.*
+    FROM {{ featureview.name }}__base as base
+    INNER JOIN {{ featureview.name }}__latest as latest
+    ON TRUE
+        AND base.{{featureview.name}}__entity_row_unique_id = latest.{{featureview.name}}__entity_row_unique_id
+        AND base.event_timestamp = latest.event_timestamp
+        {% if featureview.created_timestamp_column %}
+        AND base.created_timestamp = latest.created_timestamp
+        {% endif %}
+){% if loop.last %}{% else %}, {% endif %}
+
+
+{% endfor %}
+/*
+ Joins the outputs of multiple time travel joins to a single table.
+ The entity_dataframe dataset being our source of truth here.
+ */
+
+SELECT {{ final_output_feature_names | join(', ')}}
+FROM entity_dataframe as entity_df
+{% for featureview in featureviews %}
+LEFT JOIN (
+    SELECT
+        {{featureview.name}}__entity_row_unique_id
+        {% for feature in featureview.features %}
+            ,{% if full_feature_names %}{{ featureview.name }}__{{featureview.field_mapping.get(feature, feature)}}{% else %}{{ featureview.field_mapping.get(feature, feature) }}{% endif %}
+        {% endfor %}
+    FROM {{ featureview.name }}__cleaned
+) as cleaned
+ON TRUE
+AND entity_df.{{featureview.name}}__entity_row_unique_id = cleaned.{{featureview.name}}__entity_row_unique_id
+{% endfor %}
+"""
