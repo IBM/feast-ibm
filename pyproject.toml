@@ -12,7 +12,7 @@ authors = [
 python = "^3.8"
 feast = "~0.25.0"
 pydantic = "^1"
-ibmcloudsql = "~0.5.10"
+ibmcloudsql = "~0.5.11"
 testfixtures = "^7.0.0"
 
 [tool.poetry.dev-dependencies]
