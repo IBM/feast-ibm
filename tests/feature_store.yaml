@@ -4,6 +4,9 @@ registry: data/registry.db
 provider: local
 offline_store:
     type: ibm_data_engine.DataEngineOfflineStore
-    api_key: "TEST_API_KEY"
-    instance_crn: "TEST_INSTANCE_CRN"
-    target_cos_url: cos://us-south/w3-search-reports-new/tmp/sql
+    api_key: "${DATA_ENGINE_API_KEY}"
+    instance_crn: "${DATA_ENGINE_INSTANCE_CRN}"
+    target_cos_url: ${IBM_COS_URL}
+online_store:
+    type: redis
+    connection_string: ${REDIS_HOST}:${REDIS_PORT},username=${REDIS_USERNAME},password=${REDIS_PASSWORD},ssl=true,ssl_ca_certs=${REDIS_CERT_PATH},db=0
