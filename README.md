@@ -1,4 +1,4 @@
-Implementation of the offline store backed by the IBM Cloud Data Engine.
+Implementation of the offline store backed by the [IBM Cloud Data Engine](https://www.ibm.com/cloud/data-engine).
 
 # Installation
 
@@ -18,15 +18,15 @@ poetry run pylint ibm_data_engine
 
 # Test with Feast
 
-You use it with Feast by defining your offline store and data sources.
+You use it with [Feast](https://feast.dev/) by defining your offline store and data sources.
 The instructions below illustrate how it can be used in
-[feast-config](https://github.ibm.com/w3-Search/feast-config).
+[feast-ibm-quickstart](https://github.com/IBM/feast-ibm-quickstart).
 
 ## Define dependency
 
-This library is currently not published in Artifactory; you will have to
+This library is currently not published in [PyPI](https://pypi.org/); you will have to
 point to the repository directly. The easiest way to do it is to clone
-the repository, and define the dependency as a path in `feast-config`.
+the repository, and define the dependency as a path in `feast-ibm-quickstart`.
 
 ```toml
 ibm-data-engine = { path = "/path/to/ibm-data-engine" }
@@ -37,65 +37,70 @@ Data Engine offline store.
 
 ## Define data source
 
-You can modify the `src/ltr/features.py` file to use the new data
+You can modify the `src/feature_repo/example_repo.py` file to use the new data
 source. Below is the minimal example of the file:
 
 ```python
 from ibm_data_engine import DataEngineDataSource
-from w3_search_feast_config import letor
-
-document_features = DataEngineDataSource(
-    name="document_features",
-    table="document_features",
-    timestamp_field="timestamp",
+driver_stats_source = DataEngineDataSource(
+    name="driver_hourly_stats_source",
+    table="driver_stats_demo",
+    timestamp_field="event_timestamp",
 )
-docid = letor.Entities.docid
-document_feature_view = letor.document_feature_view(document_features)
 ```
 
 ## Define offline store
 
-Then, `feature_store.yaml` must configure the offline store.
+Then, `feature_repo/feature_store.yaml` must configure the offline store.
 
 ```yaml
-project: w3search_ltr
+project: test_plugin
 entity_key_serialization_version: 2
-# Define some temporary registry for testing purposes
-registry:
-    registry_type: local
-    path: /tmp/registry.db
+registry: data/registry.db
 provider: local
 online_store:
     type: redis
-    connection_string: 5aebc01f-35ac-4a10-87d7-cb32c6f94a22.bn2a0fgd0tu045vmv2i0.databases.appdomain.cloud:32615,username=ibm_cloud_1c205b7f_faf7_4c93_9a34_e71cc60fa741,password=${REDIS_PASSWORD},ssl=true,ssl_ca_certs=${REDIS_CERT_PATH},db=2
+    connection_string: ${REDIS_HOST}:${REDIS_PORT},username=${REDIS_USERNAME},password=${REDIS_PASSWORD},ssl=true,ssl_ca_certs=${REDIS_CERT_PATH},db=0
+
 offline_store:
-    type: "ibm_data_engine.DataEngineOfflineStore"
-    api_key: "${API_KEY}"
-    instance_crn: "${CRN}"
-    target_cos_url: cos://us-south/w3-search-reports-new/tmp/sql
+    type: ibm_data_engine.DataEngineOfflineStore
+    api_key: ${DATA_ENGINE_API_KEY}
+    instance_crn: ${DATA_ENGINE_INSTANCE_CRN}
+    target_cos_url: ${IBM_CLOUD_OBJECT_STORE_URL}
 ```
 
 Notice that you must define the environment variables:
+ * `IBM_CLOUD_OBJECT_STORE_URL`
+ * `REDIS_HOST`
+ * `REDIS_PORT`
  * `REDIS_PASSWORD`
  * `REDIS_CERT_PATH`
- * `API_KEY`
- * `CRN`
+ * `DATA_ENGINE_API_KEY`
+ * `DATA_ENGINE_INSTANCE_CRN`
 
 ## Apply
 
 To apply the definitions to the registry, run:
 
 ```
-poetry run feast -c src/ltr apply
+poetry run feast -c ./feature_repo apply
 ```
 
+## Training
+
+Run training by retrieving historical feature information from feature store
+```
+poetry run python training.py
+```
 ## Materialize
 
 To materialize to Redis, run:
 
 ```
-poetry run feast -c src/ltr materialize \
-    '2022-08-12 09:09:27.108650' \ # start date
-    '2022-08-12 09:09:27.108652' \ # end date
-    -v document_features
+poetry run feast -c ./ materialize '<START_TIMESTAMP>'  '<END_TIMESTAMP>'
+```
+# Inference
+
+```
+poetry run python inference.py
 ```
