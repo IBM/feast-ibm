@@ -1,4 +1,5 @@
-Implementation of the offline store backed by the [IBM Cloud Data Engine](https://www.ibm.com/cloud/data-engine).
+[Feast](https://feast.dev/) plugin for IBM Cloud.  
+This is plugin implements Feast's offline store backed using [IBM Cloud Data Engine](https://www.ibm.com/cloud/data-engine) and [IBM Cloud Object Storage](https://www.ibm.com/cloud/object-storage)
 
 # Installation
 
