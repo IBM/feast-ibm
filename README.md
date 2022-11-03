@@ -100,7 +100,7 @@ To materialize to Redis, run:
 ```
 poetry run feast -c ./ materialize '<START_TIMESTAMP>'  '<END_TIMESTAMP>'
 ```
-# Inference
+## Inference
 
 ```
 poetry run python inference.py
