@@ -158,6 +158,6 @@ cython_debug/
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
-.pylintrc
 pyrightconfig.json
 .envrc
+.python-version

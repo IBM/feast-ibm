@@ -1,0 +1,6 @@
+[MESSAGES CONTROL]
+disable=too-few-public-methods,
+        too-many-instance-attributes
+
+[FORMAT]
+good-names=T,F,df,k,tf,b,k1,db,fs,fv
