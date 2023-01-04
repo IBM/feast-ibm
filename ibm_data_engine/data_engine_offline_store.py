@@ -399,7 +399,7 @@ class DataEngineOfflineStore(OfflineStore):
         join_key_columns: List[str],
         feature_name_columns: List[str],
         timestamp_field: str,
-        created_timestamp_column: Optional[str],
+        created_timestamp_column: Optional[str],  # pylint: disable=unused-argument
         start_date: datetime,
         end_date: datetime,
     ) -> RetrievalJob:
@@ -423,7 +423,8 @@ class DataEngineOfflineStore(OfflineStore):
             where_clause = _where(join_key_columns, aliases=("de_a", "de_b"))
             sql_query = (
                 f"SELECT {fields} FROM {data_source.get_table_query_string()} as de_a "
-                f"JOIN ({inner()}) as de_b WHERE {where_clause} AND de_a.{timestamp_field} = de_b.timestamp"
+                f"JOIN ({inner()}) as de_b WHERE {where_clause} "
+                f"AND de_a.{timestamp_field} = de_b.timestamp"
             )
             return _sql_builder(config).run_sql(sql_query)
 
@@ -508,6 +509,7 @@ def _upload_entity_df(
             return copy_to
 
     elif isinstance(entity_df, str):
+        # pylint: disable=fixme
         # TODO: If the entity_df is a string (SQL query), create a  table out of it
         raise NotImplementedError
 
@@ -517,23 +519,24 @@ def _upload_entity_df(
 
 def _get_entity_schema(
     entity_df: Union[pd.DataFrame, str],
-    config: RepoConfig,
+    config: RepoConfig,  # pylint: disable=unused-argument
 ) -> Dict[str, np.dtype]:
     if isinstance(entity_df, pd.DataFrame):
         return dict(zip(entity_df.columns, entity_df.dtypes))
 
-    elif isinstance(entity_df, str):
+    if isinstance(entity_df, str):
         # If the entity_df is a string (SQL query)
-        # TODO:provide implementation for string entity
+        # pylint: disable=fixme
+        # TODO: provide implementation for string entity
         raise NotImplementedError
-    else:
-        raise InvalidEntityType(type(entity_df))
+
+    raise InvalidEntityType(type(entity_df))
 
 
 def _get_entity_df_event_timestamp_range(
     entity_df: Union[pd.DataFrame, str],
     entity_df_event_timestamp_col: str,
-    config: RepoConfig,
+    config: RepoConfig,  # pylint: disable=unused-argument
 ) -> Tuple[datetime, datetime]:
     if isinstance(entity_df, pd.DataFrame):
         entity_df_event_timestamp = entity_df.loc[:, entity_df_event_timestamp_col].infer_objects()
@@ -545,7 +548,8 @@ def _get_entity_df_event_timestamp_range(
         )
     elif isinstance(entity_df, str):
         # If the entity_df is a string (SQL query), determine range
-        # TODO:provide implementation for string query
+        # pylint: disable=fixme
+        # TODO: provide implementation for string query
         raise NotImplementedError
     else:
         raise InvalidEntityType(type(entity_df))

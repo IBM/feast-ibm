@@ -8,5 +8,5 @@ offline_store:
     instance_crn: "${DATA_ENGINE_INSTANCE_CRN}"
     target_cos_url: ${IBM_COS_URL}
 online_store:
-    type: redis
-    connection_string: ${REDIS_HOST}:${REDIS_PORT},username=${REDIS_USERNAME},password=${REDIS_PASSWORD},ssl=true,ssl_ca_certs=${REDIS_CERT_PATH},db=0
+    type: sqlite
+    path: data/online_store.db
