@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ibm-data-engine"
-version = "0.1.1"
+version = "0.1.2"
 description = "Feast offline feature store implementation backed by the IBM Cloud Data Engine"
 license = "Apache-2.0"
 authors = [
@@ -31,7 +31,7 @@ classifiers = [
 # We current have issues installing dependencies for 3.11. We will remove <3.11 constraint as soon
 # as the problem gets resolved.
 python = "^3.8,<3.11"
-feast = "^0.25.0"
+feast = "^0.26.0"
 ibmcloudsql = "^0.5.11"
 
 [tool.poetry.dev-dependencies]
@@ -41,7 +41,7 @@ freezegun = "^1"
 hypothesis = "^6"
 isort = "^5"
 pylint = "^2"
-pytest = "^6"
+pytest = "^7"
 pytest-cov = "^4"
 testfixtures = "^7.0.0"
 
