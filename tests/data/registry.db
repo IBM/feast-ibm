@@ -2,14 +2,14 @@
 @
  
 driver"	driver_idJtest_plugin
-èì’«ÀƒÞ€èì’«ÀƒÞ€1"$0e255bb5-b2d0-4745-912d-ec5a9b920fab*èì’«ïé€2×
+ìó«¸îµ¯ìó«¸îµ¯1"$d3da61b1-34bb-4c74-ae14-217b9798805b*ìó«¸Øæ¯2Ù
 ¸
 driver_hourly_statstest_plugindriver"
 	conv_rate"
 acc_rate"
 avg_daily_trips*
 teamdriver_performance2€£:µevent_timestamp‚A
-?{"table": "driver_stats", "query": null, "cos_type": "parquet"}Š>ibm_data_engine.data_engine_offline_store.DataEngineDataSource¢driver_hourly_stats_source@
-ÉŸ´šàÝ«EÉŸ´šàÝ«EbÃevent_timestamp‚A
+?{"table": "driver_stats", "query": null, "cos_type": "parquet"}Š>ibm_data_engine.data_engine_offline_store.DataEngineDataSource¢driver_hourly_stats_source@
+ìó«àûÈ¯ìó«àûÈ¯bÃevent_timestamp‚A
 ?{"table": "driver_stats", "query": null, "cos_type": "parquet"}Š>ibm_data_engine.data_engine_offline_store.DataEngineDataSource¢driver_hourly_stats_sourceªtest_pluginz3
-test_plugin$74850b70-e99e-4c3d-bae9-6cc23fc61e54
+test_plugin$b7acdb55-7e22-4cc5-95d8-c0b1f90711a6

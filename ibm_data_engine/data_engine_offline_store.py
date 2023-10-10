@@ -298,7 +298,10 @@ class DataEngineRetrievalJob(RetrievalJob):
         self._retrieval_metadata = retrieval_metadata
 
     def persist(
-        self, storage: SavedDatasetStorage, allow_overwrite: bool = False
+        self,
+        storage: SavedDatasetStorage,
+        allow_overwrite: bool = False,
+        timeout: Optional[int] = None,
     ):  # pragma: no cover
         raise NotImplementedError
 
@@ -315,11 +318,11 @@ class DataEngineRetrievalJob(RetrievalJob):
     def on_demand_feature_views(self):
         return None
 
-    def _to_df_internal(self) -> pd.DataFrame:
+    def _to_df_internal(self, timeout: Optional[int] = None) -> pd.DataFrame:
         df = self.evaluation_function()
         return df
 
-    def _to_arrow_internal(self) -> pyarrow.Table:
+    def _to_arrow_internal(self, timeout: Optional[int] = None) -> pyarrow.Table:
         df = self.evaluation_function()
         return pyarrow.Table.from_pandas(df)
 

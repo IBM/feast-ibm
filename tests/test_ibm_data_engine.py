@@ -23,6 +23,7 @@ import pyarrow
 import pytest
 import testfixtures
 
+import feast
 from feast import RepoConfig, ValueType, OnDemandFeatureView
 from feast.errors import DataSourceNoNameException, DataSourceNotFoundException
 from feast.infra.offline_stores import offline_utils
@@ -46,7 +47,7 @@ from tests.test_integration import get_driver_feature_view, EXPECTED_QUERY
 
 
 def test_version():
-    assert __version__ == "0.25.0"
+    assert __version__ == feast.__version__
 
 
 class SQLQueryMock(data_engine_offline_store.SQLQuery):
@@ -280,6 +281,7 @@ class TestDataEngineOfflineStore:
             target_cos_url="cos://us-south/sql/sql",
         )
         repo_config = RepoConfig(
+            registry="",
             project="test",
             provider="local",
             offline_store=config,
@@ -326,6 +328,7 @@ class TestDataEngineOfflineStore:
             target_cos_url="cos://us-south/sql/sql",
         )
         repo_config = RepoConfig(
+            registry="",
             project="test",
             provider="local",
             offline_store=config,
@@ -406,6 +409,7 @@ class TestDataEngineOfflineStore:
             target_cos_url="cos://us-south/sql/sql",
         )
         repo_config = RepoConfig(
+            registry="",
             project="test_plugin",
             provider="local",
             offline_store=config,
@@ -413,7 +417,7 @@ class TestDataEngineOfflineStore:
         )
 
         mock_registry = MockRegistry(
-            RegistryConfig(path="../integration-test/registry.db"), Path("./tests")
+            "project", RegistryConfig(path="../integration-test/registry.db"), Path("./tests")
         )
         job = offline_store.get_historical_features(
             config=repo_config,
