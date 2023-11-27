@@ -50,10 +50,11 @@ def test_version():
 
 
 class SQLQueryMock(data_engine_offline_store.SQLQuery):
-    def __init__(self, api_key, instance_crn, target_cos_url):
+    def __init__(self, api_key, instance_crn, target_cos_url, thread_safe=False):
         self.api_key = api_key
         self.instance_crn = instance_crn
         self.target_cos_url = target_cos_url
+        self._thread_safe = thread_safe
 
     def get_schema_table(self, table):
         if table == "FAIL":
