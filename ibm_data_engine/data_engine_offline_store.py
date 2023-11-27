@@ -45,6 +45,7 @@ def _sql_builder(config: RepoConfig) -> SQLQuery:
         api_key=config.offline_store.api_key,
         instance_crn=config.offline_store.instance_crn,
         target_cos_url=config.offline_store.target_cos_url,
+        thread_safe=config.offline_store.thread_safe,
     )
 
 
@@ -68,6 +69,7 @@ class DataEngineOfflineStoreConfig(FeastConfigBaseModel):
     api_key: str
     instance_crn: str
     target_cos_url: Optional[str] = None
+    thread_safe: Optional[bool] = False
 
 
 class DataEngineSchemaError(Exception):
