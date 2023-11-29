@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ibm-data-engine"
-version = "0.2.0"
+version = "0.2.1"
 description = "Feast offline feature store implementation backed by the IBM Cloud Data Engine"
 license = "Apache-2.0"
 authors = [
