@@ -16,7 +16,7 @@
 import json
 import tempfile
 from datetime import datetime
-from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -33,10 +33,12 @@ from feast.protos.feast.core.DataSource_pb2 import DataSource as DataSourceProto
 from feast.repo_config import FeastConfigBaseModel, RepoConfig
 from feast.saved_dataset import SavedDatasetStorage
 from feast.value_type import ValueType
-from ibmcloudsql import SQLQuery
+from ibmcloudsql import SQLQuery, SQLBuilder
 from typing_extensions import Literal
 
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+
+GenericSQLBuilder = TypeVar("GenericSQLBuilder", bound=SQLBuilder)
 
 
 def _sql_builder(config: RepoConfig) -> SQLQuery:
@@ -57,6 +59,25 @@ def _join(fields: List[str], alias: Optional[str] = None) -> str:
 
 def _where(fields: List[str], aliases: Tuple[str, str]) -> str:
     return ", ".join(f"{aliases[0]}.{field} = {aliases[1]}.{field}" for field in fields)
+
+
+# pylint: disable=too-many-arguments
+def _time_range_query(
+    sql: GenericSQLBuilder,
+    data_source: DataSource,
+    join_key_columns: List[str],
+    feature_name_columns: List[str],
+    timestamp_field: str,
+    start_date: datetime,
+    end_date: datetime,
+) -> GenericSQLBuilder:
+    assert isinstance(data_source, DataEngineDataSource)
+    sql.select_(", ".join(join_key_columns + feature_name_columns + [timestamp_field]))
+    sql = data_source.sql_from(sql)
+    start = cast_timestamp(start_date)
+    end = cast_timestamp(end_date)
+    sql = sql.where_(f"{timestamp_field} BETWEEN {start} AND {end}")
+    return sql
 
 
 class DataEngineOfflineStoreConfig(FeastConfigBaseModel):
@@ -277,7 +298,7 @@ class DataEngineDataSource(DataSource):
             and self.cos_type == self.cos_type
         )
 
-    def sql_from(self, sql: SQLQuery, alias: Optional[str] = None) -> SQLQuery:
+    def sql_from(self, sql: GenericSQLBuilder, alias: Optional[str] = None) -> GenericSQLBuilder:
         """Adds FROM clause to the given SQL builder.
 
         Note that alias is ignored for query sources.
@@ -413,6 +434,7 @@ class DataEngineOfflineStore(OfflineStore):
 
         def inner():
             """Constructs the SQL string for the subquery that calculates max timestamp per key."""
+            assert isinstance(data_source, DataEngineDataSource)
             keys = _join(join_key_columns)
             sql = _sql_builder(config).select_(f"{keys}, max({timestamp_field}) as timestamp")
             data_source.sql_from(sql)
@@ -422,14 +444,24 @@ class DataEngineOfflineStore(OfflineStore):
             return sql.group_by_(keys).get_sql()
 
         def retrieve_df():
+            max_timestamp_query = inner()
+            sql = SQLBuilder()
+            range_query = _time_range_query(
+                sql,
+                data_source,
+                join_key_columns,
+                feature_name_columns,
+                timestamp_field,
+                start_date,
+                end_date,
+            ).get_sql()
             fields = _join(
                 join_key_columns + feature_name_columns + [timestamp_field], alias="de_a"
             )
-            where_clause = _where(join_key_columns, aliases=("de_a", "de_b"))
+            join_on = _join(join_key_columns + [timestamp_field])
             sql_query = (
-                f"SELECT {fields} FROM {data_source.get_table_query_string()} as de_a "
-                f"JOIN ({inner()}) as de_b WHERE {where_clause} "
-                f"AND de_a.{timestamp_field} = de_b.timestamp"
+                f"SELECT {fields} FROM ({range_query}) as de_a "
+                f"JOIN ({max_timestamp_query}) as de_b USING ({join_on})"
             )
             return _sql_builder(config).run_sql(sql_query)
 
@@ -459,11 +491,15 @@ class DataEngineOfflineStore(OfflineStore):
 
         def retrieve_df():
             sql = _sql_builder(config)
-            sql.select_(", ".join(join_key_columns + feature_name_columns + [timestamp_field]))
-            sql = data_source.sql_from(sql)
-            start = cast_timestamp(start_date)
-            end = cast_timestamp(end_date)
-            sql = sql.where_(f"{timestamp_field} BETWEEN {start} AND {end}")
+            sql = _time_range_query(
+                sql,
+                data_source,
+                join_key_columns,
+                feature_name_columns,
+                timestamp_field,
+                start_date,
+                end_date,
+            )
             return sql.run(get_result=True).data
 
         return DataEngineRetrievalJob(
