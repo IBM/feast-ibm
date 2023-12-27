@@ -352,7 +352,7 @@ class TestDataEngineOfflineStore:
             ),
         )
         assert_frame_equal(job.to_df(), df)
-        expected_arg = "SELECT de_a.docid, de_a.source, de_a.timestamp FROM `document_features` as de_a JOIN (SELECT docid,\n       max(timestamp) AS timestamp\nFROM document_features\nWHERE timestamp BETWEEN cast('2022-08-12 09:09:27.108650' AS TIMESTAMP) AND cast('2022-08-12 09:09:27.108652' AS TIMESTAMP)\nGROUP BY docid) as de_b WHERE de_a.docid = de_b.docid AND de_a.timestamp = de_b.timestamp"
+        expected_arg = "SELECT de_a.docid, de_a.source, de_a.timestamp FROM (SELECT docid,\n       SOURCE, timestamp\nFROM document_features\nWHERE timestamp BETWEEN cast('2022-08-12 09:09:27.108650' AS TIMESTAMP) AND cast('2022-08-12 09:09:27.108652' AS TIMESTAMP)) as de_a JOIN (SELECT docid,\n       max(timestamp) AS timestamp\nFROM document_features\nWHERE timestamp BETWEEN cast('2022-08-12 09:09:27.108650' AS TIMESTAMP) AND cast('2022-08-12 09:09:27.108652' AS TIMESTAMP)\nGROUP BY docid) as de_b USING (docid, timestamp)"
         sql.run_sql.assert_called_once_with(expected_arg)
 
     def test_get_historical_features(self, monkeypatch):
