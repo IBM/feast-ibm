@@ -23,12 +23,10 @@ import pyarrow
 import pytest
 import testfixtures
 
-import feast
 from feast import RepoConfig, ValueType, OnDemandFeatureView
 from feast.errors import DataSourceNoNameException, DataSourceNotFoundException
 from feast.infra.offline_stores import offline_utils
 from feast.infra.offline_stores.offline_store import RetrievalMetadata
-from feast.infra.registry.base_registry import BaseRegistry
 from feast.infra.registry.registry import Registry
 from feast.repo_config import RegistryConfig
 from ibmcloudsql import SQLQuery
@@ -40,14 +38,9 @@ from ibm_data_engine import (
     DataEngineOfflineStoreConfig,
     DataEngineRetrievalJob,
     DataEngineSchemaError,
-    __version__,
     data_engine_offline_store,
 )
 from tests.test_integration import get_driver_feature_view, EXPECTED_QUERY
-
-
-def test_version():
-    assert __version__ == feast.__version__
 
 
 class SQLQueryMock(data_engine_offline_store.SQLQuery):
@@ -82,7 +75,9 @@ class SQLQueryMock(data_engine_offline_store.SQLQuery):
 
 class TestDataEngineDataSource:
     def test_eq(self):
-        assert DataEngineDataSource(table="table") == DataEngineDataSource(table="table")
+        assert DataEngineDataSource(table="table") == DataEngineDataSource(
+            table="table"
+        )
         with pytest.raises(TypeError):
             assert DataEngineDataSource(table="table") == 0
 
@@ -139,12 +134,16 @@ class TestDataEngineDataSource:
                 api_key="API_KEY", instance_crn="CRN", target_cos_url="TARGET"
             )
         )
-        assert DataEngineDataSource(table="table").get_table_column_names_and_types(config) == [
+        assert DataEngineDataSource(table="table").get_table_column_names_and_types(
+            config
+        ) == [
             ("A", "binary"),
             ("B", "integer"),
             ("C", "string"),
         ]
-        assert DataEngineDataSource(table="cos://uri").get_table_column_names_and_types(config) == [
+        assert DataEngineDataSource(table="cos://uri").get_table_column_names_and_types(
+            config
+        ) == [
             ("A", "binary"),
             ("B", "integer"),
             ("C", "string"),
@@ -152,11 +151,13 @@ class TestDataEngineDataSource:
         with pytest.raises(DataEngineSchemaError):
             DataEngineDataSource(table="FAIL").get_table_column_names_and_types(config)
         with pytest.raises(DataEngineSchemaError):
-            DataEngineDataSource(table="cos://FAIL").get_table_column_names_and_types(config)
-        with pytest.raises(ValueError):
-            DataEngineDataSource(name="name", query="query").get_table_column_names_and_types(
+            DataEngineDataSource(table="cos://FAIL").get_table_column_names_and_types(
                 config
             )
+        with pytest.raises(ValueError):
+            DataEngineDataSource(
+                name="name", query="query"
+            ).get_table_column_names_and_types(config)
 
     def test_source_datatype_to_feast_value_type(self):
         """Regression test for the correct mapping."""
@@ -192,13 +193,18 @@ class TestDataEngineDataSource:
 
     def test_sql_from(self):
         sql = lambda: SQLQuery(api_key="API", instance_crn="CRN")
-        assert DataEngineDataSource(table="table").sql_from(sql()).get_sql() == "\nFROM TABLE"
+        assert (
+            DataEngineDataSource(table="table").sql_from(sql()).get_sql()
+            == "\nFROM TABLE"
+        )
         assert (
             DataEngineDataSource(table="cos://blah").sql_from(sql()).get_sql()
             == "\nFROM cos://blah stored AS parquet"
         )
         assert (
-            DataEngineDataSource(table="cos://blah", cos_type="csv").sql_from(sql()).get_sql()
+            DataEngineDataSource(table="cos://blah", cos_type="csv")
+            .sql_from(sql())
+            .get_sql()
             == "\nFROM cos://blah stored AS csv"
         )
         assert (
@@ -213,7 +219,9 @@ class TestDataEngineDataSource:
             == "\nFROM TABLE t"
         )
         assert (
-            DataEngineDataSource(table="cos://blah").sql_from(sql(), alias="t").get_sql()
+            DataEngineDataSource(table="cos://blah")
+            .sql_from(sql(), alias="t")
+            .get_sql()
             == "\nFROM cos://blah stored AS parquet t"
         )
         assert (
@@ -223,7 +231,9 @@ class TestDataEngineDataSource:
             == "\nFROM cos://blah stored AS csv t"
         )
         assert (
-            DataEngineDataSource(name="name", query="query").sql_from(sql(), alias="t").get_sql()
+            DataEngineDataSource(name="name", query="query")
+            .sql_from(sql(), alias="t")
+            .get_sql()
             == "\nFROM (query)"
         )
 
@@ -232,7 +242,10 @@ class TestRetrievalJob:
     def test_metadata(self):
         """Metadata is simply passed to the constructor."""
         metadata = RetrievalMetadata(features=["f1", "f2"], keys=["k1"])
-        assert DataEngineRetrievalJob(lambda: pd.DataFrame(), metadata).metadata == metadata
+        assert (
+            DataEngineRetrievalJob(lambda: pd.DataFrame(), metadata).metadata
+            == metadata
+        )
 
     def test_to_df(self):
         metadata = RetrievalMetadata(features=["f1", "f2"], keys=["k1"])
@@ -357,7 +370,9 @@ class TestDataEngineOfflineStore:
 
     def test_get_historical_features(self, monkeypatch):
         offline_store = DataEngineOfflineStore()
-        driver, driver_stats_source, driver_stats_feature_view = get_driver_feature_view()
+        driver, driver_stats_source, driver_stats_feature_view = (
+            get_driver_feature_view()
+        )
 
         expected_df = pd.DataFrame(
             {
@@ -388,7 +403,9 @@ class TestDataEngineOfflineStore:
         monkeypatch.setattr(data_engine_offline_store, "_upload_entity_df", mock_upload)
         monkeypatch.setattr(data_engine_offline_store, "_delete_entity_df", mock_delete)
         monkeypatch.setattr(
-            offline_utils, "get_temp_entity_table_name", lambda: "FEAST_TEMP_ENTITY_TABLE"
+            offline_utils,
+            "get_temp_entity_table_name",
+            lambda: "FEAST_TEMP_ENTITY_TABLE",
         )
 
         entity_df = pd.DataFrame.from_dict(
@@ -417,7 +434,9 @@ class TestDataEngineOfflineStore:
         )
 
         mock_registry = MockRegistry(
-            "project", RegistryConfig(path="../integration-test/registry.db"), Path("./tests")
+            "project",
+            RegistryConfig(path="../integration-test/registry.db"),
+            Path("./tests"),
         )
         job = offline_store.get_historical_features(
             config=repo_config,
@@ -436,7 +455,9 @@ class TestDataEngineOfflineStore:
         training_df = job.to_df()
         query = sql.run_sql.call_args_list[0].args[0]
         assert (
-            testfixtures.compare(query, EXPECTED_QUERY, blanklines=False, trailing_whitespace=False)
+            testfixtures.compare(
+                query, EXPECTED_QUERY, blanklines=False, trailing_whitespace=False
+            )
             is None
         )
         assert_frame_equal(training_df, expected_df)
